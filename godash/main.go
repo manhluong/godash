@@ -13,6 +13,9 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"bytes"
+	"math/rand"
+    "time"
 )
 
 // Button is a Dash, from Amazon
@@ -21,6 +24,8 @@ type Button struct {
 	URL      string
 	Username string
 	MAC      string
+	Titles []string
+	Messages []string
 }
 
 // Configuration is Network Interface and Buttons.
@@ -86,7 +91,11 @@ func capturePackates(NIC string, filter string, buttons []Button) {
 		for _, button := range buttons {
 			if ethernetPacket.SrcMAC.String() == button.MAC {
 				log.Println("Button", button.Name, "was pressed.")
-				go makeRequest(button.URL, button.Username)
+				rand.Seed(time.Now().UTC().UnixNano())
+				go makeRequest(button.URL,
+					           button.Username,
+					           button.Titles[rand.Intn(len(button.Titles))],
+					           button.Messages[rand.Intn(len(button.Messages))])
 				break
 			}
 			log.Printf("Received button press, but don't know how to handle MAC[%v]\n", ethernetPacket.SrcMAC)
@@ -94,7 +103,7 @@ func capturePackates(NIC string, filter string, buttons []Button) {
 	}
 }
 
-func makeRequest(url string, username string) {
+func makeRequest(url string, username string, title string, body string) {
 	var cmd *exec.Cmd
 	if username != "" {
 		// Adding digest auth to Go looked like hell. This was a lot easier.
@@ -107,8 +116,10 @@ func makeRequest(url string, username string) {
 			log.Println("Curl Output:", string(output))
 		}
 	} else {
+		body := bytes.NewBufferString("{ \"value1\" : \"" + title + "\", \"value2\" : \"" + body + "\" }")
+
 		// TODO: don't hard code this to POST nor JSON. Put them in the config file.
-		res, err := http.Post(url, "application/json", nil)
+		res, err := http.Post(url, "application/json", body)
 		if err != nil {
 			log.Println("Error POSTing to URL", url, "->", err)
 			return
