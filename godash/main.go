@@ -34,6 +34,10 @@ type Configuration struct {
 	NIC     string
 }
 
+const MINIMUM_DELAY = 3
+
+var callsTime map[string]int64
+
 func loadConfig() Configuration {
 	file, _ := os.Open("conf.json")
 	decoder := json.NewDecoder(file)
@@ -45,11 +49,13 @@ func loadConfig() Configuration {
 	log.Println("Loaded", len(configuration.Buttons), "Button(s):")
 	for _, button := range configuration.Buttons {
 		log.Printf("- Button: %v (%v): %v\n", button.Name, button.MAC, button.URL)
+		callsTime[button.MAC] = 0
 	}
 	return configuration
 }
 
 func main() {
+	callsTime = make(map[string]int64)
 	var configuration = loadConfig()
 	log.Printf("Starting up on interface[%v]...", configuration.NIC)
 
@@ -66,10 +72,10 @@ func main() {
 		filter += "(ether src host " + MAC.String() + ")"
 	}
 	filter += ")"
-	capturePackates(configuration.NIC, filter, configuration.Buttons)
+	capturePackets(configuration.NIC, filter, configuration.Buttons)
 }
 
-func capturePackates(NIC string, filter string, buttons []Button) {
+func capturePackets(NIC string, filter string, buttons []Button) {
 	h, err := pcap.OpenLive(NIC, 65536, true, pcap.BlockForever)
 	defer h.Close()
 	if err != nil || h == nil {
@@ -86,19 +92,25 @@ func capturePackates(NIC string, filter string, buttons []Button) {
 	// Using a BPF filter to limit packets to only our buttons,
 	// there is no need to capture anything besides MAC here.
 	for packet := range packetSource.Packets() {
+		buttonPresent := false
 		ethernetLayer := packet.Layer(layers.LayerTypeEthernet)
 		ethernetPacket, _ := ethernetLayer.(*layers.Ethernet)
 		for _, button := range buttons {
 			if ethernetPacket.SrcMAC.String() == button.MAC {
 				log.Println("Button", button.Name, "was pressed.")
-				rand.Seed(time.Now().UTC().UnixNano())
-				go makeRequest(button.URL,
-					           button.Username,
-					           button.Titles[rand.Intn(len(button.Titles))],
-					           button.Messages[rand.Intn(len(button.Messages))])
+				buttonPresent = true;
+				if allowCall(button.MAC) {
+				   rand.Seed(time.Now().UTC().UnixNano())
+				   go makeRequest(button.URL,
+					              button.Username,
+					              button.Titles[rand.Intn(len(button.Titles))],
+					              button.Messages[rand.Intn(len(button.Messages))])
+			    }
 				break
 			}
-			log.Printf("Received button press, but don't know how to handle MAC[%v]\n", ethernetPacket.SrcMAC)
+		}
+		if buttonPresent == false {
+			log.Printf("Received button press, but don't know how to handle MAC[%v]\n", ethernetPacket.SrcMAC.String())
 		}
 	}
 }
@@ -136,4 +148,15 @@ func makeRequest(url string, username string, title string, body string) {
 			log.Println("POST Output:", string(output))
 		}
 	}
+}
+
+func allowCall(mac string) bool {
+   nowTime := time.Now().Unix()
+   difference := nowTime - callsTime[mac]
+   if difference >= MINIMUM_DELAY {
+      callsTime[mac] = nowTime
+      return true
+   }
+   log.Printf("Seconds since last press: [%v]. Minimum time between presses: [%v]", difference, MINIMUM_DELAY)
+   return false
 }
